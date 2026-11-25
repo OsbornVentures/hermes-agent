@@ -256,6 +256,26 @@ def ram_total_bytes() -> int | None:
     return parse_meminfo_total(_read_text("/proc/meminfo", 4096))
 
 
+@functools.cache
+def ram_installed_bytes() -> int | None:
+    """Installed RAM, including firmware GPU reservations Windows excludes from usable RAM.
+
+    Other hosts use their OS total. A failed Windows firmware query returns None so callers
+    can retain the conservative OS-visible bound.
+    """
+    if sys.platform != "win32":
+        return ram_total_bytes()
+    try:
+        import ctypes
+
+        kib = ctypes.c_ulonglong()
+        if ctypes.windll.kernel32.GetPhysicallyInstalledSystemMemory(ctypes.byref(kib)):
+            return int(kib.value) * 1024 or None
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    return None
+
+
 # PCI vendor ids; a discrete vendor wins over an integrated one on hybrid machines.
 _GPU_PCI_VENDORS = {"10de": "nvidia", "1002": "amd", "8086": "intel"}
 _GPU_PRIORITY = ("nvidia", "amd", "intel")
@@ -456,6 +476,6 @@ def interactive_session() -> bool:
 
 def clear_caches() -> None:
     """Clear every cached host fact."""
-    for fact in (os_family, process_arch, native_arch, cpu_model, cpu_vendor, ram_total_bytes, gpu_class,
+    for fact in (os_family, process_arch, native_arch, cpu_model, cpu_vendor, ram_total_bytes, ram_installed_bytes, gpu_class,
                  nvidia_gpus, _windows_display_adapters):
         fact.cache_clear()

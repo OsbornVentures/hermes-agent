@@ -1,9 +1,10 @@
 """Live hardware budget probe.
 
 Budget-source rule: discrete cards may trust the device query (measured honest within rounding);
-unified-memory devices must budget from OS free physical memory minus headroom — their device
-queries have been observed off by 3x in both directions. Every probe here must work under a
-stripped PATH — gateway and service sessions don't inherit the interactive environment.
+unified-memory capacity uses physical RAM and the OS GPU allowance, including firmware reservations.
+Live budgets retain OS free-memory and commit limits; unified device queries can be off by 3x.
+Every probe here must work under a stripped PATH — gateway and service sessions don't inherit
+the interactive environment.
 """
 
 from __future__ import annotations
@@ -540,11 +541,17 @@ def probe_budget(*, planning: bool = False) -> HardwareBudget:
             return HardwareBudget(usable_vram_bytes=max(0, total - margin), total_device_bytes=total,
                                   ram_available_bytes=ram_total if planning else ram_avail,
                                   uma=False, gpu_name=device["description"], platform=sys.platform)
-        # Integrated GPU, Metal, CPU, or no answer: budget from RAM as unified memory, capped at what
-        # Windows lets an integrated GPU allocate (18 GB of 31.5 on an Arc B390). llama.cpp loads
+        # Integrated GPU, Metal, CPU, or no answer: budget from RAM as unified memory. Windows GPU
+        # reservations are absent from OS-visible RAM: bound DXGI's allowance by installed RAM,
+        # while CPU inference and a failed firmware query retain the OS-visible bound. This also
+        # preserves the Intel shared-memory cap (18 GB of 31.5 on an Arc B390). llama.cpp loads
         # lazy tensors up front on an AMD/Intel integrated GPU, where reading them on demand halved
         # prefill (#28160).
-        pool = min(ram_total, _windows_igpu_bytes(device) or ram_total)
+        pool = ram_total
+        if gpu_pool := _windows_igpu_bytes(device):
+            from hermes_platform.host.facts import ram_installed_bytes
+
+            pool = min(ram_installed_bytes() or ram_total, gpu_pool)
         return _uma_budget(pool if planning else min(pool, ram_avail), pool,
                            lazy_reads=gpu_class() not in ("amd", "intel"))
 

@@ -1,9 +1,10 @@
 """Windows graphics adapters as DXGI reports them.
 
 Task Manager's "GPU memory" for an adapter is DXGI's dedicated video memory plus shared system
-memory, and that sum is what Windows lets the adapter allocate. An integrated GPU has almost no
-dedicated memory, so its shared allowance is its real pool: an Intel Arc B390 on a 31.5 GB machine
-gets 18 GB. Read through ctypes without environment-variable input or subprocesses.
+memory, and that sum is what Windows lets the adapter allocate. Some integrated GPUs have almost
+no dedicated memory (an Intel Arc B390 on a 31.5 GB machine gets 18 GB shared); others reserve
+most of the installed RAM as dedicated memory that Windows excludes from its OS-visible total.
+Read through ctypes without environment-variable input or subprocesses.
 """
 
 from __future__ import annotations

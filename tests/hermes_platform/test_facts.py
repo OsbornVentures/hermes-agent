@@ -104,6 +104,11 @@ def test_windows_native_arch_matches_registry_identifier(cleared_fact_caches) ->
     expected = "arm64" if identifier.upper().startswith("ARMV8") else "amd64"
     assert facts.native_arch() == expected
 
+
+@pytest.mark.platforms("windows")
+def test_windows_installed_ram_includes_the_os_visible_ram(cleared_fact_caches) -> None:
+    assert facts.ram_installed_bytes() >= facts.ram_total_bytes() > 0
+
 @pytest.mark.platforms("macos")
 def test_macos_live_cpu_facts(cleared_fact_caches) -> None:
     assert facts.cpu_model()

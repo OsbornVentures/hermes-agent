@@ -16,7 +16,7 @@ from hermes_cli.local_runtime import binaries
 from hermes_cli.local_runtime.binaries import Engine
 from hermes_cli.local_runtime.catalog import CATALOG, select_variant
 from hermes_cli.local_runtime.devices import GGML_DEVICE_IGPU
-from hermes_platform.host import gpu_adapters
+from hermes_platform.host import facts, gpu_adapters
 from hermes_platform.host.gpu_adapters import Adapter
 
 GIB = 1 << 30
@@ -33,6 +33,7 @@ def _machine(monkeypatch, adapters, device, *, installed="vulkan", planned="vulk
     monkeypatch.setattr(hw, "_nvidia_vram", lambda: None)
     monkeypatch.setattr(hw, "_device_pool_view", lambda: None)
     monkeypatch.setattr(hw, "_ram_bytes", lambda: (RAM, 20 * GIB))
+    monkeypatch.setattr(facts, "ram_installed_bytes", lambda: RAM)
     monkeypatch.setattr(hw, "_accelerator_device", lambda **_: device)
     monkeypatch.setattr(gpu_adapters, "windows_gpu_adapters", lambda: tuple(adapters))
     engine = None if installed is None else Engine(installed, "b11370", Path("llama-server"))
@@ -81,3 +82,28 @@ def test_a_cpu_engine_keeps_the_ram_budget(monkeypatch, adapter, installed, plan
 def test_the_pool_never_grows_past_ram(monkeypatch, adapters):
     _machine(monkeypatch, adapters, None)
     assert hw.probe_budget(planning=True).total_device_bytes == RAM
+
+
+@pytest.mark.parametrize("installed", ["vulkan", None], ids=["engine-installed", "before-setup"])
+def test_gpu_reservation_is_not_capped_at_the_ram_left_for_windows(monkeypatch, installed):
+    radeon = Adapter("AMD Radeon(TM) 840M Graphics", 0x1002, 24 * GIB, 4 * GIB, software=False)
+    _machine(monkeypatch, [radeon, SOFTWARE], None, installed=installed)
+    monkeypatch.setattr(hw, "_ram_bytes", lambda: (8 * GIB, GIB))
+    monkeypatch.setattr(facts, "ram_installed_bytes", lambda: 32 * GIB)
+
+    capacity = hw.probe_budget(planning=True)
+
+    assert capacity.uma and capacity.total_device_bytes == radeon.memory_bytes
+    assert capacity.usable_vram_bytes == int(radeon.memory_bytes * 0.8)
+    # Recognizing reserved VRAM must not bypass the separate Windows commit limit.
+    monkeypatch.setattr(hw, "_windows_commit_room", lambda _: GIB)
+    assert hw.launch_budget(capacity).usable_vram_bytes == int(GIB * 0.8)
+
+
+def test_cpu_cannot_spend_the_gpu_reservation(monkeypatch):
+    radeon = Adapter("AMD Radeon(TM) 840M Graphics", 0x1002, 24 * GIB, 4 * GIB, software=False)
+    _machine(monkeypatch, [radeon, SOFTWARE], None, installed="cpu", planned="cpu")
+    monkeypatch.setattr(hw, "_ram_bytes", lambda: (8 * GIB, GIB))
+    monkeypatch.setattr(facts, "ram_installed_bytes", lambda: 32 * GIB)
+
+    assert hw.probe_budget(planning=True).total_device_bytes == 8 * GIB
