@@ -21,7 +21,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from hermes_cli.local_runtime.devices import GGML_DEVICE_GPU
+from hermes_cli.local_runtime.devices import GGML_DEVICE_GPU, GGML_DEVICE_IGPU
 from hermes_cli.local_runtime.estimator import HardwareBudget
 from hermes_platform.host.facts import gpu_class
 
@@ -495,6 +495,26 @@ def _windows_igpu_bytes(device: dict | None) -> int | None:
     if len(candidates) != 1 or (device is None and not _gpu_engine_runs_the_model()):
         return None
     return candidates[0].memory_bytes
+
+
+def vulkan_uma_host_limited() -> bool:
+    """AMD Vulkan with most RAM reserved for the GPU and at most 8 GiB left for Windows.
+
+    The device pool fits large weights, but pinned host buffers and large KV initialization
+    still exhaust the Windows side. Keep this workaround off CPU/HIP and discrete GPUs.
+    """
+    if sys.platform != "win32" or gpu_class() != "amd":
+        return False
+    engine = _configured_engine()
+    if engine is None or engine.backend != "vulkan":
+        return False
+    device = _accelerator_device()
+    if device is None or device["type"] != GGML_DEVICE_IGPU:
+        return False
+    from hermes_platform.host.facts import ram_installed_bytes, ram_total_bytes
+
+    visible, installed = ram_total_bytes(), ram_installed_bytes()
+    return bool(visible and installed and visible <= 8 * _GIB and installed > 2 * visible)
 
 
 def probe_budget(*, planning: bool = False) -> HardwareBudget:

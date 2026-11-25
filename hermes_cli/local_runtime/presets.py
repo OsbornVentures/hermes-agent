@@ -181,6 +181,7 @@ def preset_for_model(gguf: Path, budget: HardwareBudget,
     """
     from hermes_cli.local_runtime.catalog import entry_for_model
     from hermes_cli.local_runtime.growth import load_window_overrides
+    from hermes_cli.local_runtime.hardware import vulkan_uma_host_limited
 
     model_id = model_id_from_stem(gguf.stem)
     try:
@@ -195,6 +196,7 @@ def preset_for_model(gguf: Path, budget: HardwareBudget,
 
     fixed_overhead = RUNTIME_OVERHEAD_BYTES + companions.nbytes
     requested = load_window_overrides().get(model_id) if requested_window is None else requested_window
+    limited_host = budget.uma and budget.platform == "win32" and vulkan_uma_host_limited()
     plan = plan_launch(profile, budget, mtp_capable=is_mtp, fixed_overhead=fixed_overhead,
                        requested_window=requested)
     if live is not None:
@@ -209,6 +211,11 @@ def preset_for_model(gguf: Path, budget: HardwareBudget,
         engine_tag=engine_tag, window_without=decision.window, residents=residents)
     if dflash is not None:
         plan, decision = dflash, dflash.decision
+    if limited_host:
+        # Radeon 840M / 24 GiB GPU + 8 GiB OS: 64K KV initialization exhausts host
+        # residency even with ample device memory and commit. 16K completes live inference.
+        # Cap after admission, retaining its conservative memory/spill accounting.
+        decision = replace(decision, window=min(decision.window, 16384))
     # Router discovery is preset-only: refused files must never autoload with stock fit.
     keys = _args_to_keys(launch_args(
         profile, decision, mtp_capable=is_mtp and dflash is None, uma=budget.uma,
@@ -257,6 +264,13 @@ def preset_for_model(gguf: Path, budget: HardwareBudget,
             keys["spec-type"] = "draft-dspark"
             # Unsloth's measured cliff: acceptance 83% at 2-3 drafts, collapses at 4.
             keys["spec-draft-n-max"] = "3"
+    if limited_host:
+        # Direct I/O's Vulkan_Host embedding buffer fails at Queue::submit on this
+        # topology. Ordinary CPU storage fixes it; one slot bounds recurrent state,
+        # and CPU projection retains vision without the driver's GPU load-time stall.
+        keys.update({"no-host": "on", "parallel": "1"})
+        if "mmproj" in keys:
+            keys["mmproj-offload"] = "off"
     return PresetEntry(model_id=model_id, window=decision.window,
                        spilled=decision.spilled, keys=keys)
 

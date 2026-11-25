@@ -94,11 +94,18 @@ end-to-end and exposes no knobs:
   toward their native maximum as your conversation needs more room. You
   may see "Context window grown" in the status feed during long sessions
   — that's the window expanding, not an error.
-- **Every recommended model gets at least a 64K context window.** When a
+- **Recommended models normally get at least a 64K context window.** When a
   model is larger than your GPU's memory, Hermes deliberately places the
   overflow in system RAM in the order that hurts least (expert weights
   first, never the attention cache), trading some speed to protect the
   context guarantee.
+- **AMD Vulkan on Windows with a large firmware GPU reservation and at most
+  8 GiB left for the OS uses a compatibility preset.** It caps context at
+  16K, serves one chat slot, avoids pinned host weight buffers, and runs the
+  image projector on the CPU. The language model stays on the GPU when it
+  fits; vision and MTP remain available. This handles driver allocation
+  failures that a larger page file does not resolve. Firmware-reserved GPU
+  memory still counts toward model capacity.
 - **Memory fit includes the launch configuration**, not just the model file:
   context state, runtime buffers, the vision projector, and MTP buffers all
   count. For multi-token prediction (MTP), Hermes uses smaller batches when
